@@ -1,1 +1,1 @@
-# learn_cuda
+# learn-gpu-programming
