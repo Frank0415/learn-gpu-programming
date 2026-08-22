@@ -1,0 +1,22 @@
+[
+  {
+    "name": "1x128-128t",
+    "options": {"variant": "matadd_1", "block_m": 1, "block_n": 128, "threads": 128}
+  },
+  {
+    "name": "4x32-128t",
+    "options": {"variant": "matadd_1", "block_m": 4, "block_n": 32, "threads": 128}
+  },
+  {
+    "name": "8x16-128t",
+    "options": {"variant": "matadd_1", "block_m": 8, "block_n": 16, "threads": 128}
+  },
+  {
+    "name": "16x8-128t",
+    "options": {"variant": "matadd_1", "block_m": 16, "block_n": 8, "threads": 128}
+  },
+  {
+    "name": "32x128-256t",
+    "options": {"variant": "matadd_1", "block_m": 32, "block_n": 128, "threads": 256}
+  }
+]
