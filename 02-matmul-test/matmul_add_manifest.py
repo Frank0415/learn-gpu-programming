@@ -24,9 +24,8 @@ class AddCase:
     ab_pattern: str
     c_pattern: str
     seed: int
-    warmup: int
-    trials: int
-    samples: int
+    warmup_ms: int
+    rep_ms: int
 
 
 def load_matmul_add_manifest(path: str | Path) -> tuple[dict[str, AddStage], tuple[AddCase, ...]]:
@@ -34,9 +33,9 @@ def load_matmul_add_manifest(path: str | Path) -> tuple[dict[str, AddStage], tup
     if raw["schema_version"] != 1:
         raise ValueError("unsupported MatmulAdd manifest")
     timing = raw["performance_policy"]["timing"]
-    fixed = (timing["warmup"], timing["trials"], timing["samples"])
-    if fixed != (20, 5, 50):
-        raise ValueError("timing must remain 20 warmups, 5 trials, 50 samples")
+    fixed = (timing["warmup_ms"], timing["rep_ms"])
+    if fixed != (25, 100):
+        raise ValueError("timing must remain 25 ms warmup and 100 ms measurement")
     stages = {
         name: AddStage(name, item["dtype"], item["options"])
         for name, item in raw["stages"].items()

@@ -44,11 +44,12 @@ GQA ratios 1/2/4/8, segment isolation, head mapping, scale 0, invalid inputs,
 input immutability, output metadata, and cached-output behavior.
 
 Performance uses PyTorch 2.13 `varlen_attn` with identical inputs. A core case
-is blocked if that backend is unavailable. Prepare/JIT is separate; steady
-state is fixed at 20 warmups, 5 trials, and 50 CUDA Event samples. Results
-include p20/median/p80, tokens/s, effective TFLOP/s, memory delta, environment,
-and `ours/library` ratio. The 03C gate requires median ratio <= 1.10 and worst
-core ratio <= 1.25. Variants within 1% of the best tested score are tied.
+is blocked if that backend is unavailable. Prepare/JIT is separate. Steady
+state uses gau-nernst-style `triton.testing.do_bench`: 25 ms warmup, 100 ms
+measurement, median result, and L2 clearing before every sample. Results use
+Markdown tables with duration, effective TFLOP/s, and percent of PyTorch
+varlen. The 03C gate requires median ours/library <= 1.10 and worst core ratio
+<= 1.25. Variants within 1% of the best tested score are tied.
 
 ## 03E
 

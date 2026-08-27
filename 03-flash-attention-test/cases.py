@@ -28,9 +28,8 @@ class AttentionCase:
     atol: float
     eligibility: str
     modes: tuple[str, ...]
-    warmup: int
-    trials: int
-    samples: int
+    warmup_ms: int
+    rep_ms: int
     input_multiplier: float
     checks: tuple[str, ...]
     also_run_on: tuple[str, ...]
@@ -65,9 +64,9 @@ def load_manifest(path: str | Path) -> Manifest:
         raise ValueError("unsupported FlashAttention manifest")
     policy = raw["performance_policy"]
     timing = policy["timing"]
-    fixed_timing = (timing["warmup"], timing["trials"], timing["samples"])
-    if fixed_timing != (20, 5, 50):
-        raise ValueError("timing must remain 20 warmups, 5 trials, 50 samples")
+    fixed_timing = (timing["warmup_ms"], timing["rep_ms"])
+    if fixed_timing != (25, 100):
+        raise ValueError("timing must remain 25 ms warmup and 100 ms measurement")
 
     cases = tuple(
         AttentionCase(
@@ -86,9 +85,8 @@ def load_manifest(path: str | Path) -> Manifest:
             atol=item["tolerance"]["atol"],
             eligibility=item["eligibility"],
             modes=tuple(item["modes"]),
-            warmup=fixed_timing[0],
-            trials=fixed_timing[1],
-            samples=fixed_timing[2],
+            warmup_ms=fixed_timing[0],
+            rep_ms=fixed_timing[1],
             input_multiplier=item.get("input_multiplier", 1.0),
             checks=tuple(item.get("checks", [])),
             also_run_on=tuple(item.get("also_run_on", [])),

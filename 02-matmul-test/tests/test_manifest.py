@@ -24,11 +24,17 @@ class MatmulManifestTests(unittest.TestCase):
         case = next(case for case in manifest.cases if case.case_id == "three-axis-tail")
         self.assertEqual((case.M, case.N, case.K), (37, 53, 29))
 
-    def test_timing_is_fixed_for_every_case(self) -> None:
+    def test_gau_benchmark_budget_is_fixed(self) -> None:
         manifest = load_manifest(ROOT / "manifests" / "matmul_v1.json")
         self.assertTrue(
-            all((case.warmup, case.trials, case.samples) == (20, 5, 50) for case in manifest.cases)
+            all((case.warmup_ms, case.rep_ms) == (25, 100) for case in manifest.cases)
         )
+        timing = manifest.performance_policy["timing"]
+        self.assertEqual(timing["method"], "triton.testing.do_bench")
+        self.assertEqual(timing["return_mode"], "median")
+        self.assertTrue(timing["clear_l2"])
+        square = next(case for case in manifest.cases if case.case_id == "square-4096")
+        self.assertEqual((square.M, square.N, square.K, square.pattern), (4096, 4096, 4096, "random"))
 
 
 if __name__ == "__main__":

@@ -24,9 +24,8 @@ class FixedCase:
     K: int
     pattern: str
     seed: int
-    warmup: int
-    trials: int
-    samples: int
+    warmup_ms: int
+    rep_ms: int
 
 
 @dataclass(frozen=True)
@@ -42,9 +41,9 @@ def load_manifest(path: str | Path) -> MatmulManifest:
         raise ValueError("unsupported Matmul manifest")
     policy = raw["performance_policy"]
     timing = policy["timing"]
-    fixed_timing = (timing["warmup"], timing["trials"], timing["samples"])
-    if fixed_timing != (20, 5, 50):
-        raise ValueError("timing must remain 20 warmups, 5 trials, 50 samples")
+    fixed_timing = (timing["warmup_ms"], timing["rep_ms"])
+    if fixed_timing != (25, 100):
+        raise ValueError("timing must remain 25 ms warmup and 100 ms measurement")
 
     stages = {
         name: Stage(name, item["compute_capability"], item["dtype"], item["options"])

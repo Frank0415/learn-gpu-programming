@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-import math
-import statistics
 import subprocess
 import time
 from typing import Callable
 
 import torch
+from triton.testing import do_bench
 
 
 DTYPES = {
@@ -23,15 +21,6 @@ TOLERANCES = {
 }
 
 
-@dataclass(frozen=True)
-class Timing:
-    last: torch.Tensor
-    p20_ms: float
-    median_ms: float
-    p80_ms: float
-    reference_median_ms: float
-
-
 def prepare(call: Callable[[], torch.Tensor], device: torch.device) -> tuple[torch.Tensor, float, int]:
     torch.cuda.reset_peak_memory_stats(device)
     memory_before = torch.cuda.memory_allocated(device)
@@ -44,63 +33,29 @@ def prepare(call: Callable[[], torch.Tensor], device: torch.device) -> tuple[tor
     return output, elapsed_ms, peak_delta
 
 
-def _event(call: Callable[[], torch.Tensor]) -> tuple[torch.Tensor, float]:
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    output = call()
-    end.record()
-    end.synchronize()
-    return output, float(start.elapsed_time(end))
-
-
-def _percentile(values: list[float], fraction: float) -> float:
-    ordered = sorted(values)
-    position = fraction * (len(ordered) - 1)
-    low, high = math.floor(position), math.ceil(position)
-    if low == high:
-        return ordered[low]
-    return ordered[low] * (high - position) + ordered[high] * (position - low)
-
-
-def benchmark_pair(
-    ours: Callable[[], torch.Tensor],
-    reference: Callable[[], torch.Tensor],
-    *,
-    warmup: int,
-    trials: int,
-    samples: int,
-) -> Timing:
-    for _ in range(warmup):
-        ours()
-        reference()
-    torch.cuda.synchronize()
-
-    ours_trials: list[float] = []
-    reference_trials: list[float] = []
-    last: torch.Tensor | None = None
-    for trial in range(trials):
-        ours_samples: list[float] = []
-        reference_samples: list[float] = []
-        for _ in range(samples):
-            ordered = ((ours, ours_samples, True), (reference, reference_samples, False))
-            if trial % 2:
-                ordered = tuple(reversed(ordered))
-            for call, sink, is_ours in ordered:
-                output, elapsed = _event(call)
-                sink.append(elapsed)
-                if is_ours:
-                    last = output
-        ours_trials.append(statistics.median(ours_samples))
-        reference_trials.append(statistics.median(reference_samples))
-    assert last is not None
-    return Timing(
-        last,
-        _percentile(ours_trials, 0.2),
-        statistics.median(ours_trials),
-        _percentile(ours_trials, 0.8),
-        statistics.median(reference_trials),
+def benchmark(call: Callable[[], torch.Tensor], *, warmup_ms: int, rep_ms: int) -> float:
+    return float(
+        do_bench(call, warmup=warmup_ms, rep=rep_ms, return_mode="median")
     )
+
+
+def print_table(
+    title: str,
+    reference_name: str,
+    reference_ms: float,
+    reference_tflops: float,
+    rows: list[tuple[str, float, float]],
+) -> None:
+    print(f"\n{title}")
+    print(f"| Kernel | Duration (ms) | TFLOP/s | % of {reference_name} |")
+    print("|---|---:|---:|---:|")
+    print(
+        f"| {reference_name} | {reference_ms:.4f} | "
+        f"{reference_tflops:.4f} | 100.00% |"
+    )
+    for name, duration_ms, tflops in rows:
+        percent = reference_ms / duration_ms * 100
+        print(f"| {name} | {duration_ms:.4f} | {tflops:.4f} | {percent:.2f}% |")
 
 
 def environment(backend: str) -> dict[str, object]:

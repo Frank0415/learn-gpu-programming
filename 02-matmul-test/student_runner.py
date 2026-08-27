@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -13,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from cases import MatmulCase, make_inputs
-from common import DTYPES, TOLERANCES, benchmark_pair, environment, prepare
+from common import DTYPES, TOLERANCES, benchmark, environment, prepare, print_table
 from contract import Matmul, load_matmul
 from manifest import FixedCase, load_manifest
 
@@ -122,14 +121,11 @@ def performance(
         if not torch.equal(A, before_A) or not torch.equal(B, before_B):
             raise AssertionError(f"{case.case_id}: adapter mutated A or B during prepare")
 
-        timing = benchmark_pair(
-            ours,
-            library,
-            warmup=case.warmup,
-            trials=case.trials,
-            samples=case.samples,
+        reference_ms = benchmark(
+            library, warmup_ms=case.warmup_ms, rep_ms=case.rep_ms
         )
-        _check(case, A, B, timing.last, expected)
+        ours_ms = benchmark(ours, warmup_ms=case.warmup_ms, rep_ms=case.rep_ms)
+        _check(case, A, B, ours(), expected)
         if not torch.equal(A, before_A) or not torch.equal(B, before_B):
             raise AssertionError(f"{case.case_id}: adapter mutated A or B during timing")
 
@@ -137,21 +133,22 @@ def performance(
         changed_A.view(-1)[0] += 0.25
         _check(case, changed_A, B, adapter(changed_A, B, **options), changed_A @ B)
 
-        result = {
-            "case": case.case_id,
-            "shape_mnk": [case.M, case.N, case.K],
-            "dtype": str(dtype).removeprefix("torch."),
-            "prepare_ms": prepare_ms,
-            "ours_peak_memory_delta_bytes": peak_memory_delta,
-            "p20_ms": timing.p20_ms,
-            "median_ms": timing.median_ms,
-            "p80_ms": timing.p80_ms,
-            "torch_median_ms": timing.reference_median_ms,
-            "ratio_ours_over_torch": timing.median_ms / timing.reference_median_ms,
-            "tflops": (2 * case.M * case.N * case.K) / (timing.median_ms / 1000) / 1e12,
-            **metadata,
-        }
-        print(json.dumps(result, sort_keys=True))
+        flops = 2 * case.M * case.N * case.K
+        print(
+            f"Environment: {metadata['gpu']} {metadata['compute_capability']}, "
+            f"Torch {metadata['torch']}, TileLang {metadata['tilelang']}"
+        )
+        print(
+            f"Prepare: {prepare_ms:.3f} ms; "
+            f"peak allocation delta: {peak_memory_delta} bytes"
+        )
+        print_table(
+            f"case={case.case_id} shape={case.M}x{case.N}x{case.K} dtype={dtype}",
+            "cuBLAS",
+            reference_ms,
+            flops / (reference_ms * 1e-3) / 1e12,
+            [("student", ours_ms, flops / (ours_ms * 1e-3) / 1e12)],
+        )
 
 
 def main() -> None:

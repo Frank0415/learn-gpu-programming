@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -22,8 +23,13 @@ class MatmulAddManifestTests(unittest.TestCase):
             ("02b-baseline-fp32", "02b-fused-fp16", "02b-final"),
         )
         self.assertTrue(
-            all((c.warmup, c.trials, c.samples) == (20, 5, 50) for c in self.cases)
+            all((c.warmup_ms, c.rep_ms) == (25, 100) for c in self.cases)
         )
+        raw = json.loads((ROOT / "manifests" / "matmul_add_v1.json").read_text())
+        timing = raw["performance_policy"]["timing"]
+        self.assertEqual(timing["method"], "triton.testing.do_bench")
+        self.assertEqual(timing["return_mode"], "median")
+        self.assertTrue(timing["clear_l2"])
 
     def test_c_is_observable_and_tails_are_fixed(self) -> None:
         c_only = next(c for c in self.cases if c.case_id == "c-only")

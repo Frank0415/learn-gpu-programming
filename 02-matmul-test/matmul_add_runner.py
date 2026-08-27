@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -11,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from cases import MatmulCase, make_inputs
-from common import DTYPES, TOLERANCES, benchmark_pair, environment, prepare
+from common import DTYPES, TOLERANCES, benchmark, environment, prepare, print_table
 from matmul_add_contract import MatmulAdd, load_matmul_add
 from matmul_add_manifest import AddCase, load_matmul_add_manifest
 
@@ -111,10 +110,11 @@ def performance(adapter: MatmulAdd, cases: list[AddCase], dtype: torch.dtype, op
         reference = lambda: torch.addmm(inputs[2], inputs[0], inputs[1])
         prepared, prepare_ms, peak_delta = prepare(ours, inputs[0].device)
         _check(case, inputs, prepared, expected)
-        timing = benchmark_pair(
-            ours, reference, warmup=case.warmup, trials=case.trials, samples=case.samples
+        reference_ms = benchmark(
+            reference, warmup_ms=case.warmup_ms, rep_ms=case.rep_ms
         )
-        _check(case, inputs, timing.last, expected)
+        ours_ms = benchmark(ours, warmup_ms=case.warmup_ms, rep_ms=case.rep_ms)
+        _check(case, inputs, ours(), expected)
         if any(not torch.equal(now, saved) for now, saved in zip(inputs, before)):
             raise AssertionError(f"{case.case_id}: adapter mutated an input")
 
@@ -125,21 +125,18 @@ def performance(adapter: MatmulAdd, cases: list[AddCase], dtype: torch.dtype, op
         _check(case, changed_inputs, adapter(*changed_inputs, **options), changed_expected)
 
         operations = 2 * case.M * case.N * case.K + case.M * case.N
-        row = {
-            "case": case.case_id,
-            "shape_mnk": [case.M, case.N, case.K],
-            "dtype": str(dtype).removeprefix("torch."),
-            "prepare_ms": prepare_ms,
-            "ours_peak_memory_delta_bytes": peak_delta,
-            "p20_ms": timing.p20_ms,
-            "median_ms": timing.median_ms,
-            "p80_ms": timing.p80_ms,
-            "torch_addmm_median_ms": timing.reference_median_ms,
-            "ratio_ours_over_torch_addmm": timing.median_ms / timing.reference_median_ms,
-            "effective_tflops": operations / (timing.median_ms / 1000) / 1e12,
-            **metadata,
-        }
-        print(json.dumps(row, sort_keys=True))
+        print(
+            f"Environment: {metadata['gpu']} {metadata['compute_capability']}, "
+            f"Torch {metadata['torch']}, TileLang {metadata['tilelang']}"
+        )
+        print(f"Prepare: {prepare_ms:.3f} ms; peak allocation delta: {peak_delta} bytes")
+        print_table(
+            f"case={case.case_id} shape={case.M}x{case.N}x{case.K} dtype={dtype}",
+            "torch.addmm",
+            reference_ms,
+            operations / (reference_ms * 1e-3) / 1e12,
+            [("student", ours_ms, operations / (ours_ms * 1e-3) / 1e12)],
+        )
 
 
 def main() -> None:

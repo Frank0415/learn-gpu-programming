@@ -18,7 +18,7 @@
     }
   },
   "performance_policy": {
-    "timing": {"warmup": 20, "trials": 5, "samples": 50},
+    "timing": {"method": "triton.testing.do_bench", "warmup_ms": 25, "rep_ms": 100, "return_mode": "median", "clear_l2": true},
     "reference": "torch.addmm(C,A,B)",
     "operations": "2*M*N*K + M*N"
   },
@@ -28,7 +28,7 @@
     {"id": "product-only", "stages": ["02b-baseline-fp32", "02b-fused-fp16", "02b-final"], "mode": "correctness", "M": 17, "N": 31, "K": 9, "ab_pattern": "ramp", "c_pattern": "zeros", "seed": 3},
     {"id": "three-axis-tail", "stages": ["02b-baseline-fp32", "02b-fused-fp16", "02b-final"], "mode": "correctness", "M": 37, "N": 53, "K": 29, "ab_pattern": "random", "c_pattern": "random", "seed": 4},
     {"id": "large-tail", "stages": ["02b-fused-fp16", "02b-final"], "mode": "correctness", "M": 129, "N": 257, "K": 65, "ab_pattern": "random", "c_pattern": "ramp", "seed": 5},
-    {"id": "square-1024", "stages": ["02b-baseline-fp32", "02b-fused-fp16", "02b-final"], "mode": "performance", "M": 1024, "N": 1024, "K": 1024, "ab_pattern": "ramp", "c_pattern": "ramp", "seed": 10},
+    {"id": "square-4096", "stages": ["02b-baseline-fp32", "02b-fused-fp16", "02b-final"], "mode": "performance", "M": 4096, "N": 4096, "K": 4096, "ab_pattern": "random", "c_pattern": "random", "seed": 10},
     {"id": "rectangular-2048x1024x4096", "stages": ["02b-fused-fp16", "02b-final"], "mode": "performance", "M": 2048, "N": 1024, "K": 4096, "ab_pattern": "ramp", "c_pattern": "random", "seed": 11}
   ]
 }

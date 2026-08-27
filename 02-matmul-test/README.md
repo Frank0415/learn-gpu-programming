@@ -43,10 +43,15 @@ uv run python 02-matmul-test/student_runner.py \
 - Output type, shape, dtype, device, non-aliasing, numerical result, repeated
   result, input immutability, and unknown-variant rejection.
 - Prepare/JIT outside steady-state timing.
-- Fixed 20 warmups, 5 trials, and 50 CUDA Event samples per trial.
-- Alternating student/PyTorch order on identical A/B objects and pointers.
-- p20/median/p80, `2*M*N*K` TFLOP/s, latency ratio, peak-memory delta, and
-  GPU/software metadata.
+- gau-nernst-style `triton.testing.do_bench`: 25 ms warmup, 100 ms measurement,
+  median result, and L2 cleared before each sample.
+- Reference first, then student, on identical A/B objects and pointers.
+- Markdown tables with duration, `2*M*N*K` TFLOP/s, percent of cuBLAS,
+  peak-memory delta, and GPU/software metadata.
+
+The harness does not fabricate a bandwidth value from tensor sizes. The
+bandwidth column in gau-nernst's SIMT table comes from Nsight Compute hardware
+counters; collect it separately when profiler access is available.
 
 The manifest targets SM120. Tensor Core stages must be confirmed from generated
 code; `T.gemm` alone is not proof. SM100 TCGen05/Tensor Memory paths and B200

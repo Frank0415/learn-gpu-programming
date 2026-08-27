@@ -1,4 +1,4 @@
-"""Manifest-locked correctness and paired-performance runner.
+"""Manifest-locked correctness and gau-style median benchmark runner.
 
 Student-facing choices are intentionally limited to stage, mode, and adapter.
 ``--case-id`` exists only as an explicit debugging escape hatch.
@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import PackageNotFoundError, version
 import json
-import math
 from pathlib import Path
 import statistics
 import subprocess
@@ -18,6 +17,7 @@ import time
 from typing import Any, Callable
 
 import torch
+from triton.testing import do_bench
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -290,24 +290,15 @@ def run_correctness(adapter: AttentionForward, cases: list[AttentionCase]) -> No
     print("PASS negative-contract-probes")
 
 
-def _percentile(values: list[float], fraction: float) -> float:
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * fraction
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    return ordered[lower] * (upper - position) + ordered[upper] * (position - lower)
-
-
-def _event_call(call: Callable[[], torch.Tensor]) -> tuple[torch.Tensor, float]:
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    output = call()
-    end.record()
-    end.synchronize()
-    return output, float(start.elapsed_time(end))
+def _bench(call: Callable[[], torch.Tensor], case: AttentionCase) -> float:
+    return float(
+        do_bench(
+            call,
+            warmup=case.warmup_ms,
+            rep=case.rep_ms,
+            return_mode="median",
+        )
+    )
 
 
 def _environment() -> dict[str, Any]:
@@ -380,10 +371,8 @@ def run_performance(
 
     rows: list[dict[str, Any]] = []
     environment = _environment()
-    backend_name = "torch.nn.attention.varlen.varlen_attn"
-    for case_index, case in enumerate(cases):
-        # Materialize once. Every tested adapter and the library baseline see
-        # these exact objects, data pointers, strides, dtype, device, and stream.
+    backend_name = "PyTorch varlen"
+    for case in cases:
         q, k, v, cu = make_inputs(case)
         before = tuple(tensor.clone() for tensor in (q, k, v, cu))
         expected = fp32_segment_reference(
@@ -398,101 +387,68 @@ def run_performance(
             causal=case.causal,
             scale=case.scale,
         )
-        library_prepared = library_call()
-        _validate_output(case, library_prepared, expected, (q, k, v))
+        _validate_output(case, library_call(), expected, (q, k, v))
+        library_ms = _bench(library_call, case)
+        case_rows: list[dict[str, Any]] = []
 
-        # Reverse variant order every other case to reduce systematic thermal
-        # or frequency bias while preserving CLI order in the final ranking.
-        variant_order = adapters if case_index % 2 == 0 else list(reversed(adapters))
-        for adapter_name, adapter in variant_order:
+        for adapter_name, adapter in adapters:
             ours_call = lambda adapter=adapter: _invoke(adapter, case, q, k, v, cu)
-
-            # Host wall time plus synchronization includes host-side JIT/lowering
-            # and the first GPU work, but remains separate from steady-state data.
             torch.cuda.reset_peak_memory_stats(q.device)
             memory_before = torch.cuda.memory_allocated(q.device)
             torch.cuda.synchronize(q.device)
             prepare_start = time.perf_counter()
             prepared = ours_call()
             torch.cuda.synchronize(q.device)
-            prepare_ms = (time.perf_counter() - prepare_start) * 1_000.0
+            prepare_ms = (time.perf_counter() - prepare_start) * 1_000
             peak_memory_delta = max(
                 0, torch.cuda.max_memory_allocated(q.device) - memory_before
             )
             _validate_output(case, prepared, expected, (q, k, v))
             _assert_inputs_unchanged(case, (q, k, v, cu), before)
 
-            for _ in range(case.warmup):
-                ours_call()
-                library_call()
-            torch.cuda.synchronize()
-
-            ours_trial_medians: list[float] = []
-            library_trial_medians: list[float] = []
-            last_output = prepared
-            for trial in range(case.trials):
-                ours_samples: list[float] = []
-                library_samples: list[float] = []
-                for _ in range(case.samples):
-                    ordered = ((ours_call, ours_samples), (library_call, library_samples))
-                    if trial % 2:
-                        ordered = tuple(reversed(ordered))
-                    for call, sink in ordered:
-                        result, elapsed = _event_call(call)
-                        sink.append(elapsed)
-                        if call is ours_call:
-                            last_output = result
-                ours_trial_medians.append(statistics.median(ours_samples))
-                library_trial_medians.append(statistics.median(library_samples))
-
-            _validate_output(case, last_output, expected, (q, k, v))
+            ours_ms = _bench(ours_call, case)
+            _validate_output(case, ours_call(), expected, (q, k, v))
             _assert_inputs_unchanged(case, (q, k, v, cu), before)
 
-            # A new input after timing catches adapters that cache an output.
             changed_q = q.clone()
             changed_q.view(-1)[0] += 0.25
             changed_expected = fp32_segment_reference(
-                changed_q,
-                k,
-                v,
-                cu,
-                case.max_seqlen,
-                causal=case.causal,
-                scale=case.scale,
+                changed_q, k, v, cu, case.max_seqlen,
+                causal=case.causal, scale=case.scale,
             )
             changed = _invoke(adapter, case, changed_q, k, v, cu)
             _validate_output(case, changed, changed_expected, (changed_q, k, v))
 
-            ours_ms = statistics.median(ours_trial_medians)
-            library_ms = statistics.median(library_trial_medians)
             row = {
                 "adapter": adapter_name,
                 "case": case.case_id,
-                "stage": requested_stage,
-                "manifest_stage": case.stage,
-                "lengths": list(case.lengths),
-                "max_seqlen": case.max_seqlen,
-                "hq": case.hq,
-                "hkv": case.hkv,
-                "head_dim": case.head_dim,
-                "dtype": case.dtype_name,
-                "causal": case.causal,
-                "scale": case.scale,
                 "eligibility": case.eligibility,
-                "backend": backend_name,
-                **environment,
-                "prepare_ms": prepare_ms,
-                "ours_peak_memory_delta_bytes": peak_memory_delta,
-                "ours_p20_ms": _percentile(ours_trial_medians, 0.2),
-                "ours_median_ms": ours_ms,
-                "ours_p80_ms": _percentile(ours_trial_medians, 0.8),
-                "library_median_ms": library_ms,
+                "duration_ms": ours_ms,
+                "library_ms": library_ms,
                 "ratio_ours_over_library": ours_ms / library_ms,
-                "tokens_per_s": case.total_tokens / (ours_ms / 1000),
-                "effective_tflops": case.flops / (ours_ms / 1000) / 1e12,
+                "effective_tflops": case.flops / (ours_ms * 1e-3) / 1e12,
+                "prepare_ms": prepare_ms,
+                "peak_memory_delta": peak_memory_delta,
             }
             rows.append(row)
-            print(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            case_rows.append(row)
+
+        print(
+            f"\ncase={case.case_id} lengths={list(case.lengths)} "
+            f"Hq/Hkv={case.hq}/{case.hkv} D={case.head_dim} "
+            f"dtype={case.dtype_name} causal={case.causal}"
+        )
+        print(f"Environment: {environment['gpu']} {environment['compute_capability']}")
+        print(f"| Kernel | Duration (ms) | TFLOP/s | % of {backend_name} |")
+        print("|---|---:|---:|---:|")
+        library_tflops = case.flops / (library_ms * 1e-3) / 1e12
+        print(f"| {backend_name} | {library_ms:.4f} | {library_tflops:.4f} | 100.00% |")
+        for row in case_rows:
+            percent = library_ms / row["duration_ms"] * 100
+            print(
+                f"| {row['adapter']} | {row['duration_ms']:.4f} | "
+                f"{row['effective_tflops']:.4f} | {percent:.2f}% |"
+            )
 
     thresholds = policy["thresholds"]
     summaries: list[dict[str, Any]] = []
@@ -517,10 +473,14 @@ def run_performance(
     tie_fraction = float(thresholds["tie_fraction"])
     gate_applied = requested_stage == "03c"
     failed: list[str] = []
-    for rank, summary in enumerate(
+    ranked = list(enumerate(
         sorted(summaries, key=lambda item: (item["core_score"], item["adapter"])),
         start=1,
-    ):
+    ))
+    print(f"\n{requested_stage} core ranking")
+    print("| Rank | Adapter | Median ours/library | Worst | Tied best | Gate |")
+    print("|---:|---|---:|---:|---|---|")
+    for rank, summary in ranked:
         summary.update(
             {
                 "type": "adapter_ranking",
@@ -533,7 +493,11 @@ def run_performance(
                 "backend": backend_name,
             }
         )
-        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        gate = "applied" if gate_applied else "not applied"
+        print(
+            f"| {rank} | {summary['adapter']} | {summary['core_score']:.4f} | "
+            f"{summary['core_worst']:.4f} | {summary['tied_best']} | {gate} |"
+        )
         if gate_applied and (
             summary["core_score"] > thresholds["median_ratio_max"]
             or summary["core_worst"] > thresholds["worst_ratio_max"]
@@ -549,8 +513,7 @@ def main() -> None:
     args = _parse_args()
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required by the fixed attention contract")
-    # The student command has no manifest override: packed shapes, GQA cases,
-    # tolerances, and the 20x5x50 timing protocol are fixed in the repository.
+    # Packed shapes, tolerances, and do_bench time budgets are fixed by manifest.
     manifest = load_manifest(HERE / "manifests" / "flash_attention_v1.json")
     expected_cc = manifest.stage_rules[args.stage]["compute_capability"]
     actual_cc = f"sm{torch.cuda.get_device_capability()[0]}{torch.cuda.get_device_capability()[1]}"

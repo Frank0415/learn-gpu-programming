@@ -49,14 +49,18 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(h200_nvfp4[0]["support"], "reference")
         self.assertTrue(manifest["no_silent_fallback"])
 
-    def test_performance_timing_is_fixed(self) -> None:
+    def test_gau_benchmark_budget_is_fixed(self) -> None:
         manifest = load_manifest(ROOT / "manifests" / "flash_attention_v1.json")
         self.assertTrue(
             all(
-                (case.warmup, case.trials, case.samples) == (20, 5, 50)
+                (case.warmup_ms, case.rep_ms) == (25, 100)
                 for case in manifest.cases
             )
         )
+        timing = manifest.performance_policy["timing"]
+        self.assertEqual(timing["method"], "triton.testing.do_bench")
+        self.assertEqual(timing["return_mode"], "median")
+        self.assertTrue(timing["clear_l2"])
 
 
 if __name__ == "__main__":

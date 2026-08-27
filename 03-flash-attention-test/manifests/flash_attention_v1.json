@@ -15,8 +15,8 @@
   },
   "performance_policy": {
     "same_inputs": "all adapters reuse the same tensor objects, pointers, layout, dtype, device, and stream",
-    "order": "paired and alternating ours/library by trial",
-    "timing": {"warmup": 20, "trials": 5, "samples": 50},
+    "order": "reference first, then each adapter, matching gau-nernst SIMT benchmark",
+    "timing": {"method": "triton.testing.do_bench", "warmup_ms": 25, "rep_ms": 100, "return_mode": "median", "clear_l2": true},
     "score": "median of per-case latency ratio ours/library over core cases",
     "thresholds": {"median_ratio_max": 1.1, "worst_ratio_max": 1.25, "tie_fraction": 0.01}
   },
