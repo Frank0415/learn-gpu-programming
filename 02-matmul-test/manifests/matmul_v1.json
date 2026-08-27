@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "abi": "matmul(A,B,**options) -> C",
+  "stage_order": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"],
+  "stages": {
+    "naive-fp32": {
+      "compute_capability": "sm120", "dtype": "float32",
+      "options": {"variant": "matmul_1", "block_m": 16, "block_n": 16, "block_k": 16, "threads": 128}
+    },
+    "shared-fp32": {
+      "compute_capability": "sm120", "dtype": "float32",
+      "options": {"variant": "matmul_shared", "block_m": 32, "block_n": 32, "block_k": 16, "threads": 128}
+    },
+    "tensorcore": {
+      "compute_capability": "sm120", "dtype": "float16",
+      "options": {"variant": "matmul_gemm", "block_m": 64, "block_n": 64, "block_k": 32, "threads": 128}
+    },
+    "pipeline": {
+      "compute_capability": "sm120", "dtype": "float16",
+      "options": {"variant": "matmul_pipeline", "block_m": 64, "block_n": 64, "block_k": 32, "threads": 128, "num_stages": 3}
+    },
+    "final": {
+      "compute_capability": "sm120", "dtype": "float16",
+      "options": {"variant": "matmul_final", "block_m": 128, "block_n": 128, "block_k": 32, "threads": 256, "num_stages": 3}
+    }
+  },
+  "performance_policy": {
+    "timing": {"warmup": 20, "trials": 5, "samples": 50},
+    "same_inputs": "student and torch reference reuse identical A/B objects, pointers, dtype, layout, device, and stream",
+    "flops": "2*M*N*K",
+    "result": "p20/median/p80 over trial medians plus TFLOP/s and latency ratio student/torch"
+  },
+  "cases": [
+    {"id": "scalar-zero", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 1, "N": 1, "K": 1, "pattern": "zeros", "seed": 1},
+    {"id": "small-rectangle", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 7, "N": 19, "K": 13, "pattern": "ramp", "seed": 2},
+    {"id": "three-axis-tail", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 37, "N": 53, "K": 29, "pattern": "random", "seed": 3},
+    {"id": "large-tail", "stages": ["shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 129, "N": 257, "K": 65, "pattern": "random", "seed": 4},
+    {"id": "skinny-m", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 1, "N": 127, "K": 31, "pattern": "random", "seed": 5},
+    {"id": "skinny-n", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "correctness", "M": 113, "N": 1, "K": 17, "pattern": "random", "seed": 6},
+    {"id": "square-1024", "stages": ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"], "mode": "performance", "M": 1024, "N": 1024, "K": 1024, "pattern": "ramp", "seed": 10},
+    {"id": "rectangular-2048x1024x4096", "stages": ["tensorcore", "pipeline", "final"], "mode": "performance", "M": 2048, "N": 1024, "K": 4096, "pattern": "ramp", "seed": 11}
+  ]
+}
+
