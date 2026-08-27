@@ -4,3 +4,11 @@
 *.ptx
 *.cubin
 *.fatbin
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+
+# Trash
+Trash/
