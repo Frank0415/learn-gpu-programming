@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "abi": "attention_forward(q,k,v,cu_seqlens,max_seqlen,*,causal,scale=None,**options)",
+  "semantics": "packed equal-length-per-request self-attention; no cross attention or empty request",
+  "stage_rules": {
+    "03a": {"compute_capability": "sm120", "scope": "FA1 single-request MHA"},
+    "03b": {"compute_capability": "sm120", "scope": "FA2 single-request MHA"},
+    "03c": {"compute_capability": "sm120", "scope": "FA2 packed GQA"},
+    "03d": {"compute_capability": "sm90", "scope": "same 03C semantics on H200/SM90a"}
+  },
+  "reference": {
+    "correctness": "per-request FP32 QK^T -> stable softmax -> V",
+    "performance": "torch.nn.attention.varlen.varlen_attn from PyTorch 2.13",
+    "core_unavailable": "blocked"
+  },
+  "performance_policy": {
+    "same_inputs": "all adapters reuse the same tensor objects, pointers, layout, dtype, device, and stream",
+    "order": "paired and alternating ours/library by trial",
+    "timing": {"warmup": 20, "trials": 5, "samples": 50},
+    "score": "median of per-case latency ratio ours/library over core cases",
+    "thresholds": {"median_ratio_max": 1.1, "worst_ratio_max": 1.25, "tie_fraction": 0.01}
+  },
+  "cases": [
+    {
+      "id": "03a-s1-d64-f16-nc-default", "stage": "03a", "lengths": [1],
+      "hq": 4, "hkv": 4, "head_dim": 64, "dtype": "float16", "seed": 101,
+      "causal": false, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.01, "atol": 0.01}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03a-s63-d64-f16-c-default", "stage": "03a", "lengths": [63],
+      "hq": 8, "hkv": 8, "head_dim": 64, "dtype": "float16", "seed": 102,
+      "causal": true, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03a-s64-d64-bf16-nc-one", "stage": "03a", "lengths": [64],
+      "hq": 8, "hkv": 8, "head_dim": 64, "dtype": "bfloat16", "seed": 103,
+      "causal": false, "scale": 1.0, "options": {},
+      "tolerance": {"rtol": 0.03, "atol": 0.03}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03a-s65-d64-f16-c-zero", "stage": "03a", "lengths": [65],
+      "hq": 8, "hkv": 8, "head_dim": 64, "dtype": "float16", "seed": 104,
+      "causal": true, "scale": 0.0, "options": {},
+      "tolerance": {"rtol": 0.01, "atol": 0.01}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03a-s127-d128-bf16-nc-default", "stage": "03a", "lengths": [127],
+      "hq": 8, "hkv": 8, "head_dim": 128, "dtype": "bfloat16", "seed": 105,
+      "causal": false, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.035, "atol": 0.035}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03a-s128-d128-f16-c-default", "stage": "03a", "lengths": [128],
+      "hq": 8, "hkv": 8, "head_dim": 128, "dtype": "float16", "seed": 106,
+      "causal": true, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "03a-s129-d64-f16-nc-default", "stage": "03a", "lengths": [129],
+      "hq": 16, "hkv": 16, "head_dim": 64, "dtype": "float16", "seed": 107,
+      "causal": false, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "03a-large-finite", "stage": "03a", "lengths": [65],
+      "hq": 4, "hkv": 4, "head_dim": 64, "dtype": "float16", "seed": 108,
+      "causal": false, "scale": null, "input_multiplier": 20.0, "options": {},
+      "tolerance": {"rtol": 0.02, "atol": 0.02}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+
+    {
+      "id": "03b-s65-d64-f16-c", "stage": "03b", "lengths": [65],
+      "hq": 8, "hkv": 8, "head_dim": 64, "dtype": "float16", "seed": 201,
+      "causal": true, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03b-s127-d128-bf16-nc", "stage": "03b", "lengths": [127],
+      "hq": 8, "hkv": 8, "head_dim": 128, "dtype": "bfloat16", "seed": 202,
+      "causal": false, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.035, "atol": 0.035}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "03b-s128-d64-f16-nc", "stage": "03b", "lengths": [128],
+      "hq": 16, "hkv": 16, "head_dim": 64, "dtype": "float16", "seed": 203,
+      "causal": false, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "03b-s257-d64-bf16-c", "stage": "03b", "lengths": [257],
+      "hq": 16, "hkv": 16, "head_dim": 64, "dtype": "bfloat16", "seed": 204,
+      "causal": true, "scale": null, "options": {},
+      "tolerance": {"rtol": 0.035, "atol": 0.035}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+
+    {
+      "id": "packed-1-33-65-257-r1-d64-f16-nc", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [1, 33, 65, 257], "hq": 8, "hkv": 8, "head_dim": 64,
+      "dtype": "float16", "seed": 301, "causal": false, "scale": null, "options": {},
+      "checks": ["segment_isolation"],
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "packed-1-33-65-257-r2-d64-f16-c", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [1, 33, 65, 257], "hq": 8, "hkv": 4, "head_dim": 64,
+      "dtype": "float16", "seed": 302, "causal": true, "scale": null, "options": {},
+      "checks": ["segment_isolation", "kv_head_sentinel"],
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "packed-63-64-65-r4-d64-bf16-nc", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [63, 64, 65], "hq": 16, "hkv": 4, "head_dim": 64,
+      "dtype": "bfloat16", "seed": 303, "causal": false, "scale": 1.0, "options": {},
+      "checks": ["segment_isolation", "kv_head_sentinel"],
+      "tolerance": {"rtol": 0.035, "atol": 0.035}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "packed-127-128-129-r8-d128-f16-c", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [127, 128, 129], "hq": 16, "hkv": 2, "head_dim": 128,
+      "dtype": "float16", "seed": 304, "causal": true, "scale": null, "options": {},
+      "checks": ["segment_isolation", "kv_head_sentinel"],
+      "tolerance": {"rtol": 0.02, "atol": 0.02}, "eligibility": "core",
+      "modes": ["correctness", "performance"]
+    },
+    {
+      "id": "packed-scale-zero-r4-d64-f16-c", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [33, 65], "hq": 8, "hkv": 2, "head_dim": 64,
+      "dtype": "float16", "seed": 305, "causal": true, "scale": 0.0, "options": {},
+      "checks": ["segment_isolation", "kv_head_sentinel"],
+      "tolerance": {"rtol": 0.015, "atol": 0.015}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    },
+    {
+      "id": "packed-large-finite-r2-d64-bf16-nc", "stage": "03c", "also_run_on": ["03d"],
+      "lengths": [64, 129], "hq": 8, "hkv": 4, "head_dim": 64,
+      "dtype": "bfloat16", "seed": 306, "causal": false, "scale": null,
+      "input_multiplier": 20.0, "options": {}, "checks": ["segment_isolation"],
+      "tolerance": {"rtol": 0.04, "atol": 0.04}, "eligibility": "correctness",
+      "modes": ["correctness"]
+    }
+  ]
+}

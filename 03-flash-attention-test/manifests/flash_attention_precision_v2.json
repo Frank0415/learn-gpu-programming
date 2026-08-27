@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "stage": "03e",
+  "extends_abi": "flash_attention_v1 + keyword quantization=None",
+  "dequantization_convention": "real = decode(data) * local_dequant_scale * global_dequant_scale",
+  "no_silent_fallback": true,
+  "math_policy": {
+    "softmax_max_dtype": "float32",
+    "softmax_sum_dtype": "float32",
+    "separate_error_reports": ["quantization_error", "kernel_error"],
+    "performance_modes": ["kernel_only", "end_to_end_including_pack_and_scale"],
+    "scale_bytes_counted": true,
+    "comparison_rule": "compare only identical format, scale granularity, scale layout, and output dtype"
+  },
+  "format_cases": [
+    {
+      "id": "fp32-reference-sm120", "architecture": "sm120", "format": "fp32",
+      "storage_dtype": "float32", "compute_dtype": "float32", "accumulator_dtype": "float32",
+      "output_dtype": "float32", "scale_mode": "none", "block_size": null, "support": "reference"
+    },
+    {
+      "id": "tf32-compute-sm120", "architecture": "sm120", "format": "tf32",
+      "storage_dtype": "float32", "compute_dtype": "tf32", "accumulator_dtype": "float32",
+      "output_dtype": "float32", "scale_mode": "none", "block_size": null, "support": "native"
+    },
+    {
+      "id": "fp16-sm120", "architecture": "sm120", "format": "fp16",
+      "storage_dtype": "float16", "compute_dtype": "float16", "accumulator_dtype": "float32",
+      "output_dtype": "float16", "scale_mode": "none", "block_size": null, "support": "native"
+    },
+    {
+      "id": "bf16-sm120", "architecture": "sm120", "format": "bf16",
+      "storage_dtype": "bfloat16", "compute_dtype": "bfloat16", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_mode": "none", "block_size": null, "support": "native"
+    },
+    {
+      "id": "fp8-e4m3-per-tensor-sm120", "architecture": "sm120", "format": "fp8_e4m3",
+      "storage_dtype": "float8_e4m3fn", "compute_dtype": "float8_e4m3fn", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_mode": "per_tensor", "block_size": null, "support": "native"
+    },
+    {
+      "id": "fp8-e5m2-per-head-sm120", "architecture": "sm120", "format": "fp8_e5m2",
+      "storage_dtype": "float8_e5m2", "compute_dtype": "float8_e5m2", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_mode": "per_head", "block_size": null, "support": "native"
+    },
+    {
+      "id": "fp8-e4m3-block128-sm120", "architecture": "sm120", "format": "fp8_e4m3",
+      "storage_dtype": "float8_e4m3fn", "compute_dtype": "float8_e4m3fn", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_mode": "block", "block_size": 128, "support": "native"
+    },
+    {
+      "id": "mxfp8-e4m3-block32-sm120", "architecture": "sm120", "format": "mxfp8_e4m3",
+      "storage_dtype": "float8_e4m3fn", "compute_dtype": "float8_e4m3fn", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_dtype": "float8_e8m0fnu", "scale_mode": "block",
+      "block_size": 32, "support": "native"
+    },
+    {
+      "id": "mxfp4-boundary-sm120", "architecture": "sm120", "format": "mxfp4",
+      "storage_dtype": "float4_e2m1fn_x2", "compute_dtype": "implementation_defined_until_verified",
+      "accumulator_dtype": "float32", "output_dtype": "bfloat16", "scale_mode": "block",
+      "block_size": 32, "support": "reference"
+    },
+    {
+      "id": "nvfp4-block16-sm120", "architecture": "sm120", "format": "nvfp4",
+      "storage_dtype": "float4_e2m1fn_x2", "compute_dtype": "e2m1", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_dtype": "float8_e4m3fn", "global_scale_dtype": "float32",
+      "scale_mode": "block", "block_size": 16, "support": "native"
+    },
+    {
+      "id": "nvfp4-block16-h200-reference", "architecture": "sm90", "format": "nvfp4",
+      "storage_dtype": "float4_e2m1fn_x2", "compute_dtype": "decoded_reference", "accumulator_dtype": "float32",
+      "output_dtype": "bfloat16", "scale_dtype": "float8_e4m3fn", "global_scale_dtype": "float32",
+      "scale_mode": "block", "block_size": 16, "support": "reference"
+    }
+  ],
+  "required_correctness_cases": [
+    "zero", "representable_exact_values", "saturation_edges", "scale_boundary_minus_one_exact_plus_one",
+    "per_head_sentinel", "packed_segment_scale_isolation", "causal_and_noncausal", "gqa_ratios_1_2_4_8",
+    "quantization_error_vs_fp32", "kernel_error_vs_dequantized_reference", "unsupported_capability_error"
+  ]
+}
+
