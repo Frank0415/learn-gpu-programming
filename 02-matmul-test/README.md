@@ -51,3 +51,26 @@ uv run python 02-matmul-test/student_runner.py \
 The manifest targets SM120. Tensor Core stages must be confirmed from generated
 code; `T.gemm` alone is not proof. SM100 TCGen05/Tensor Memory paths and B200
 numbers do not apply to this harness.
+
+## 02B: A@B+C
+
+02B keeps the original Matmul ABI unchanged and adds a separate function:
+
+```python
+def matmul_add(A, B, C, **options) -> D:
+    ...
+```
+
+`D[M,N] = A[M,K] @ B[K,N] + C[M,N]`. C is a complete matrix; this stage does
+not support bias broadcasting or alpha/beta parameters.
+
+```bash
+uv run python 02-matmul-test/matmul_add_runner.py \
+  --stage 02b-baseline-fp32 \
+  --mode correctness \
+  --adapter 02b-matmul-add-tilelang/main.py
+```
+
+Later stages are `02b-fused-fp16` and `02b-final`. The reference is
+`torch.addmm(C,A,B)`. The fixed gate verifies that C is observable, rejects a
+broadcast C, checks all inputs for mutation, and times the whole fused call.

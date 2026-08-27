@@ -3,15 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from importlib.metadata import PackageNotFoundError, version
 import json
-import math
 from pathlib import Path
-import statistics
-import subprocess
 import sys
-import time
-from typing import Callable
 
 import torch
 
@@ -19,20 +13,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from cases import MatmulCase, make_inputs
+from common import DTYPES, TOLERANCES, benchmark_pair, environment, prepare
 from contract import Matmul, load_matmul
 from manifest import FixedCase, load_manifest
-
-
-DTYPES = {
-    "float32": torch.float32,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-}
-TOLERANCES = {
-    torch.float32: (1e-4, 1e-5),
-    torch.float16: (1e-2, 1e-2),
-    torch.bfloat16: (2e-2, 2e-2),
-}
 
 
 def _args() -> argparse.Namespace:
@@ -119,59 +102,6 @@ def correctness(
             raise AssertionError(f"{case.case_id}: adapter mutated A or B")
         print(f"PASS correctness {case.case_id} {case.M}x{case.N}x{case.K}")
 
-
-
-def _event(call: Callable[[], torch.Tensor]) -> tuple[torch.Tensor, float]:
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    output = call()
-    end.record()
-    end.synchronize()
-    return output, float(start.elapsed_time(end))
-
-
-def _percentile(values: list[float], fraction: float) -> float:
-    ordered = sorted(values)
-    position = fraction * (len(ordered) - 1)
-    low, high = math.floor(position), math.ceil(position)
-    return ordered[low] if low == high else ordered[low] * (high - position) + ordered[high] * (position - low)
-
-
-def _environment() -> dict[str, object]:
-    props = torch.cuda.get_device_properties(torch.cuda.current_device())
-    driver: str | None = None
-    try:
-        query = subprocess.run(
-            [
-                "nvidia-smi",
-                f"--id={torch.cuda.current_device()}",
-                "--query-gpu=driver_version",
-                "--format=csv,noheader,nounits",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-        driver = query.stdout.strip().splitlines()[0] or None
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, IndexError):
-        pass
-    try:
-        tilelang_version: str | None = version("tilelang")
-    except PackageNotFoundError:
-        tilelang_version = None
-    return {
-        "gpu": props.name,
-        "compute_capability": f"sm{props.major}{props.minor}",
-        "torch": torch.__version__,
-        "tilelang": tilelang_version,
-        "cuda_runtime": torch.version.cuda,
-        "driver": driver,
-        "backend": "torch.matmul",
-    }
-
-
 def performance(
     adapter: Matmul,
     cases: list[FixedCase],
@@ -179,7 +109,7 @@ def performance(
     dtype: torch.dtype,
     options: dict,
 ) -> None:
-    environment = _environment()
+    metadata = environment("torch.matmul")
     for case in cases:
         A, B = _materialize(case, dtype)
         before_A, before_B = A.clone(), B.clone()
@@ -187,43 +117,19 @@ def performance(
         ours = lambda: adapter(A, B, **options)
         library = lambda: torch.matmul(A, B)
 
-        torch.cuda.reset_peak_memory_stats(A.device)
-        memory_before = torch.cuda.memory_allocated(A.device)
-        torch.cuda.synchronize(A.device)
-        prepare_start = time.perf_counter()
-        prepared = ours()
-        torch.cuda.synchronize(A.device)
-        prepare_ms = (time.perf_counter() - prepare_start) * 1_000.0
-        peak_memory_delta = max(
-            0, torch.cuda.max_memory_allocated(A.device) - memory_before
-        )
+        prepared, prepare_ms, peak_memory_delta = prepare(ours, A.device)
         _check(case, A, B, prepared, expected)
         if not torch.equal(A, before_A) or not torch.equal(B, before_B):
             raise AssertionError(f"{case.case_id}: adapter mutated A or B during prepare")
 
-        for _ in range(case.warmup):
-            ours()
-            library()
-        torch.cuda.synchronize()
-
-        ours_trials: list[float] = []
-        lib_trials: list[float] = []
-        last = prepared
-        for trial in range(case.trials):
-            ours_samples: list[float] = []
-            lib_samples: list[float] = []
-            for _ in range(case.samples):
-                ordered = ((ours, ours_samples, True), (library, lib_samples, False))
-                if trial % 2:
-                    ordered = tuple(reversed(ordered))
-                for call, sink, is_ours in ordered:
-                    output, elapsed = _event(call)
-                    sink.append(elapsed)
-                    if is_ours:
-                        last = output
-            ours_trials.append(statistics.median(ours_samples))
-            lib_trials.append(statistics.median(lib_samples))
-        _check(case, A, B, last, expected)
+        timing = benchmark_pair(
+            ours,
+            library,
+            warmup=case.warmup,
+            trials=case.trials,
+            samples=case.samples,
+        )
+        _check(case, A, B, timing.last, expected)
         if not torch.equal(A, before_A) or not torch.equal(B, before_B):
             raise AssertionError(f"{case.case_id}: adapter mutated A or B during timing")
 
@@ -231,21 +137,19 @@ def performance(
         changed_A.view(-1)[0] += 0.25
         _check(case, changed_A, B, adapter(changed_A, B, **options), changed_A @ B)
 
-        ours_ms = statistics.median(ours_trials)
-        lib_ms = statistics.median(lib_trials)
         result = {
             "case": case.case_id,
             "shape_mnk": [case.M, case.N, case.K],
             "dtype": str(dtype).removeprefix("torch."),
             "prepare_ms": prepare_ms,
             "ours_peak_memory_delta_bytes": peak_memory_delta,
-            "p20_ms": _percentile(ours_trials, 0.2),
-            "median_ms": ours_ms,
-            "p80_ms": _percentile(ours_trials, 0.8),
-            "torch_median_ms": lib_ms,
-            "ratio_ours_over_torch": ours_ms / lib_ms,
-            "tflops": (2 * case.M * case.N * case.K) / (ours_ms / 1000) / 1e12,
-            **environment,
+            "p20_ms": timing.p20_ms,
+            "median_ms": timing.median_ms,
+            "p80_ms": timing.p80_ms,
+            "torch_median_ms": timing.reference_median_ms,
+            "ratio_ours_over_torch": timing.median_ms / timing.reference_median_ms,
+            "tflops": (2 * case.M * case.N * case.K) / (timing.median_ms / 1000) / 1e12,
+            **metadata,
         }
         print(json.dumps(result, sort_keys=True))
 
