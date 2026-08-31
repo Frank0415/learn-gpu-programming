@@ -11,13 +11,16 @@ from manifest import load_manifest
 
 
 class MatmulManifestTests(unittest.TestCase):
-    def test_fixed_student_contract(self) -> None:
+    def test_single_fp16_config(self) -> None:
         manifest = load_manifest(ROOT / "manifests" / "matmul_v1.json")
-        self.assertEqual(
-            list(manifest.stages),
-            ["naive-fp32", "shared-fp32", "tensorcore", "pipeline", "final"],
-        )
-        self.assertTrue(all(stage.compute_capability == "sm120" for stage in manifest.stages.values()))
+        self.assertEqual(manifest.config.compute_capability, "sm120")
+        self.assertEqual(manifest.config.input_dtype, "float16")
+
+    def test_tensor_core_tiles_meet_mma_shape(self) -> None:
+        options = load_manifest(ROOT / "manifests" / "matmul_v1.json").config.options
+        self.assertEqual(options["block_m"] % 16, 0)
+        self.assertEqual(options["block_n"] % 16, 0)
+        self.assertEqual(options["block_k"] % 16, 0)
 
     def test_all_three_tail_axes_are_present(self) -> None:
         manifest = load_manifest(ROOT / "manifests" / "matmul_v1.json")

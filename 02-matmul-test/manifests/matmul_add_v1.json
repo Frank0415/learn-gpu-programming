@@ -6,15 +6,15 @@
   "stages": {
     "02b-baseline-fp32": {
       "dtype": "float32",
-      "options": {"variant": "matmul_add_1", "block_m": 16, "block_n": 16, "block_k": 16, "threads": 128}
+      "options": {"block_m": 16, "block_n": 16, "block_k": 16, "threads": 128}
     },
     "02b-fused-fp16": {
       "dtype": "float16",
-      "options": {"variant": "matmul_add_fused", "block_m": 64, "block_n": 64, "block_k": 32, "threads": 128, "num_stages": 3}
+      "options": {"block_m": 64, "block_n": 64, "block_k": 32, "threads": 128, "num_stages": 3}
     },
     "02b-final": {
       "dtype": "float16",
-      "options": {"variant": "matmul_add_final", "block_m": 128, "block_n": 128, "block_k": 32, "threads": 256, "num_stages": 3}
+      "options": {"block_m": 128, "block_n": 128, "block_k": 32, "threads": 256, "num_stages": 3}
     }
   },
   "performance_policy": {
