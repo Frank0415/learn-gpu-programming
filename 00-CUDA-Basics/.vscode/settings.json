@@ -1,0 +1,6 @@
+{
+    "[cuda-cpp]": {
+        "editor.defaultFormatter": "ebextensions.active-clang-format",
+        "editor.formatOnSave": true
+    }
+}

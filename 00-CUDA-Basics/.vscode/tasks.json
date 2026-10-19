@@ -1,0 +1,48 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CUDA: build current file",
+            "type": "process",
+            "command": "/usr/bin/make",
+            "args": [
+                "-C",
+                "${fileDirname}",
+                "bin/${fileBasenameNoExtension}"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                {
+                    "base": "$nvcc",
+                    "fileLocation": [
+                        "relative",
+                        "${fileDirname}"
+                    ]
+                }
+            ]
+        },
+        {
+            "label": "CUDA: run current file",
+            "type": "process",
+            "command": "/usr/bin/make",
+            "args": [
+                "-C",
+                "${fileDirname}",
+                "run",
+                "PROGRAM=${fileBasenameNoExtension}"
+            ],
+            "problemMatcher": [
+                {
+                    "base": "$nvcc",
+                    "fileLocation": [
+                        "relative",
+                        "${fileDirname}"
+                    ]
+                }
+            ]
+        }
+    ]
+}
