@@ -1,0 +1,12 @@
+If:
+  PathMatch: .*\.(cu|cuh)
+CompileFlags:
+  Compiler: /usr/bin/g++-15
+  Add:
+    - -xcuda
+    - -std=c++17
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_120
+    - --cuda-host-only
+    - --gcc-install-dir=/usr/lib/gcc/x86_64-redhat-linux/15
+    - -Wno-unknown-cuda-version
