@@ -1,24 +1,35 @@
 #include "common.cuh"
-#ifdef __clang__
-#include <__clang_cuda_builtin_vars.h>
-#endif
 #include <cstddef>
 #include <cstdio>
 #include <stdio.h>
 
-constexpr int M = 256;
-constexpr int N = 256;
-constexpr int K = 256;
+#define DEBUG 0
+
+// #ifdef DEBUG
+
+// constexpr int M = 4;
+// constexpr int N = 8;
+// constexpr int K = 4;
+
+// constexpr int TILE = 2;
+
+// #else
+
+constexpr int M = 4096;
+constexpr int N = 4096;
+constexpr int K = 4096;
 
 constexpr int TILE = 16;
+
+// #endif
 
 // c == nullptr: fill a, b and write the reference product into got.
 // c != nullptr: compare c against got.
 int host_gemm(float *a, float *b, float *got, const float *c, int m, int n, int k);
 
 using matmul_kernel = void (*)(float *, float *, float *, int, int, int);
-float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C,
-                       int m, int n, int k, int iters);
+float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C, int m, int n, int k,
+                       int iters);
 
 // Multiply matrix A in size (m,n), B in size (n,k) into C（m,k）
 __global__ void matmul(float *A, float *B, float *C, int m, int n, int k) {
@@ -43,28 +54,55 @@ __global__ void matmul(float *A, float *B, float *C, int m, int n, int k) {
 }
 
 // Multiply matrix A in size (m,n), B in size (n,k) into C（m,k）
-// For a tile size of (blockDim.x, blockDim.y), we load the related memory to __shared__ A_cache and B_cache
+// For a tile size of (blockDim.x, blockDim.y), we load the related memory to __shared__ A_cache and
+// B_cache
 __global__ void matmul_shared_block(float *A, float *B, float *C, int m, int n, int k) {
-    constexpr int size = TILE*TILE;
-    __shared__ int A_cache[size];
-    
+    constexpr int size = TILE * TILE;
+    __shared__ float A_cache[size];
+    __shared__ float B_cache[size];
+
     int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
     int pos_y = blockIdx.y * blockDim.y + threadIdx.y;
-
     if (pos_x >= k || pos_y >= m)
         return;
 
-    int c_pos = pos_y * k + pos_x;
+    int blocks = (n + blockDim.x - 1) / TILE;
 
     float acc = 0.0f;
- 
-    for (int i = 0; i < n; i++) {
-        float a = A[pos_y * n + i];
-        float b = B[i * k + pos_x];
 
-        acc += a * b;
+    int A_pos = blockDim.y * blockIdx.y * n;
+    int B_pos = blockIdx.x * blockDim.x;
+    int cache_pos = threadIdx.y * blockDim.x + threadIdx.x;
+    int glob_pos_A = threadIdx.y * n + threadIdx.x;
+    int glob_pos_B = threadIdx.y * k + threadIdx.x;
+    for (int i = 0; i < blocks; i++) {
+
+        // bring the data into __shared__
+        A_cache[cache_pos] = A[A_pos + glob_pos_A];
+        B_cache[cache_pos] = B[B_pos + glob_pos_B];
+
+#if DEBUG
+        if (blockIdx.x == 0 && blockIdx.y == 1) {
+            printf("Index: %d\nMoved global position A(%d,%d) into A_cache(%d,%d), B(%d,%d) into "
+                   "B_cache(%d,%d)\n",
+                   i, (A_pos + glob_pos_A) % n, (A_pos + glob_pos_A) / n, threadIdx.y, threadIdx.x,
+                   (B_pos + glob_pos_B) % k, (B_pos + glob_pos_B) / k, threadIdx.y, threadIdx.x);
+        }
+#endif
+
+        A_pos += blockDim.x;
+        B_pos += k * blockDim.y;
+        __syncthreads();
+        for (int i = 0; i < TILE; i++) {
+            float a = A_cache[threadIdx.y * blockDim.x + i];
+            float b = B_cache[i * blockDim.y + threadIdx.x];
+
+            acc += a * b;
+        }
+        __syncthreads();
     }
 
+    int c_pos = pos_y * k + pos_x;
     C[c_pos] = acc;
 }
 
@@ -98,7 +136,8 @@ int main(int argc, char **argv) {
 
     CUDA_CHECK(cudaMemcpy(A, a, a_n * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(B, b, b_n * sizeof(float), cudaMemcpyHostToDevice));
-    matmul<<<grid, block>>>(A, B, C, M, N, K);
+    // matmul<<<grid, block>>>(A, B, C, M, N, K);
+    matmul_shared_block<<<grid, block>>>(A, B, C, M, N, K);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy(c, C, c_n * sizeof(float), cudaMemcpyDeviceToHost));
@@ -107,8 +146,7 @@ int main(int argc, char **argv) {
     const int iters = 10;
     float ms = test_time_matmul(matmul, A, B, C, M, N, K, iters);
     float ms_shared = test_time_matmul(matmul_shared_block, A, B, C, M, N, K, iters);
-    printf("matmul:               %.3f ms  (%.2f GFLOP/s)\n", ms,
-           2.0 * M * N * K / (ms * 1e6));
+    printf("matmul:               %.3f ms  (%.2f GFLOP/s)\n", ms, 2.0 * M * N * K / (ms * 1e6));
     printf("matmul_shared_block:  %.3f ms  (%.2f GFLOP/s)\n", ms_shared,
            2.0 * M * N * K / (ms_shared * 1e6));
 
@@ -124,12 +162,12 @@ int main(int argc, char **argv) {
 
 // Returns the average kernel time in milliseconds over `iters` launches.
 // `kernel` is a host-side pointer to a __global__ function.
-float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C,
-                       int m, int n, int k, int iters) {
+float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C, int m, int n, int k,
+                       int iters) {
     dim3 block(TILE, TILE);
     dim3 grid((k + block.x - 1) / block.x, (m + block.y - 1) / block.y);
 
-    kernel<<<grid, block>>>(A, B, C, m, n, k);  // warmup
+    kernel<<<grid, block>>>(A, B, C, m, n, k); // warmup
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
