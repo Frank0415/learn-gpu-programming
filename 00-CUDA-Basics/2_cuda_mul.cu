@@ -1,17 +1,26 @@
 #include "common.cuh"
+#ifdef __clang__
+#include <__clang_cuda_builtin_vars.h>
+#endif
 #include <cstddef>
 #include <cstdio>
 #include <stdio.h>
 
-constexpr int M = 2;
-constexpr int N = 11;
-constexpr int K = 5;
+constexpr int M = 256;
+constexpr int N = 256;
+constexpr int K = 256;
+
+constexpr int TILE = 16;
 
 // c == nullptr: fill a, b and write the reference product into got.
 // c != nullptr: compare c against got.
 int host_gemm(float *a, float *b, float *got, const float *c, int m, int n, int k);
 
-// Multiply matrix A in size (m,n), B in size (n,k) into C （m,k）
+using matmul_kernel = void (*)(float *, float *, float *, int, int, int);
+float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C,
+                       int m, int n, int k, int iters);
+
+// Multiply matrix A in size (m,n), B in size (n,k) into C（m,k）
 __global__ void matmul(float *A, float *B, float *C, int m, int n, int k) {
     int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
     int pos_y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -23,6 +32,32 @@ __global__ void matmul(float *A, float *B, float *C, int m, int n, int k) {
 
     float acc = 0.0f;
 
+    for (int i = 0; i < n; i++) {
+        float a = A[pos_y * n + i];
+        float b = B[i * k + pos_x];
+
+        acc += a * b;
+    }
+
+    C[c_pos] = acc;
+}
+
+// Multiply matrix A in size (m,n), B in size (n,k) into C（m,k）
+// For a tile size of (blockDim.x, blockDim.y), we load the related memory to __shared__ A_cache and B_cache
+__global__ void matmul_shared_block(float *A, float *B, float *C, int m, int n, int k) {
+    constexpr int size = TILE*TILE;
+    __shared__ int A_cache[size];
+    
+    int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int pos_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (pos_x >= k || pos_y >= m)
+        return;
+
+    int c_pos = pos_y * k + pos_x;
+
+    float acc = 0.0f;
+ 
     for (int i = 0; i < n; i++) {
         float a = A[pos_y * n + i];
         float b = B[i * k + pos_x];
@@ -56,7 +91,9 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMalloc((void **)&B, b_n * sizeof(float)));
     CUDA_CHECK(cudaMalloc((void **)&C, c_n * sizeof(float)));
 
-    dim3 block(16, 8);
+    CUDA_CHECK(cudaMemset(C, 0, c_n * sizeof(float)));
+
+    dim3 block(TILE, TILE);
     dim3 grid((K + block.x - 1) / block.x, (M + block.y - 1) / block.y);
 
     CUDA_CHECK(cudaMemcpy(A, a, a_n * sizeof(float), cudaMemcpyHostToDevice));
@@ -67,6 +104,14 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMemcpy(c, C, c_n * sizeof(float), cudaMemcpyDeviceToHost));
     int rc = host_gemm(a, b, got, c, M, N, K);
 
+    const int iters = 10;
+    float ms = test_time_matmul(matmul, A, B, C, M, N, K, iters);
+    float ms_shared = test_time_matmul(matmul_shared_block, A, B, C, M, N, K, iters);
+    printf("matmul:               %.3f ms  (%.2f GFLOP/s)\n", ms,
+           2.0 * M * N * K / (ms * 1e6));
+    printf("matmul_shared_block:  %.3f ms  (%.2f GFLOP/s)\n", ms_shared,
+           2.0 * M * N * K / (ms_shared * 1e6));
+
     delete[] a;
     delete[] b;
     delete[] c;
@@ -75,6 +120,35 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaFree(B));
     CUDA_CHECK(cudaFree(C));
     return rc;
+}
+
+// Returns the average kernel time in milliseconds over `iters` launches.
+// `kernel` is a host-side pointer to a __global__ function.
+float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C,
+                       int m, int n, int k, int iters) {
+    dim3 block(TILE, TILE);
+    dim3 grid((k + block.x - 1) / block.x, (m + block.y - 1) / block.y);
+
+    kernel<<<grid, block>>>(A, B, C, m, n, k);  // warmup
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iters; i++) {
+        kernel<<<grid, block>>>(A, B, C, m, n, k);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    return ms / iters;
 }
 
 int host_gemm(float *a, float *b, float *got, const float *c, int m, int n, int k) {
