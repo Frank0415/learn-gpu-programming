@@ -23,9 +23,8 @@ constexpr int TILE = 16;
 
 // #endif
 
-// c == nullptr: fill a, b and write the reference product into got.
-// c != nullptr: compare c against got.
-int host_gemm(float *a, float *b, float *got, const float *c, int m, int n, int k);
+void host_fill(float *a, float *b, int m, int n, int k);
+int host_compare(const float *ref, const float *got, int m, int k);
 
 using matmul_kernel = void (*)(float *, float *, float *, int, int, int);
 float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C, int m, int n, int k,
@@ -117,9 +116,9 @@ int main(int argc, char **argv) {
     float *a = new float[a_n];
     float *b = new float[b_n];
     float *c = new float[c_n];
-    float *got = new float[c_n];
+    float *ref = new float[c_n];
 
-    host_gemm(a, b, got, nullptr, M, N, K);
+    host_fill(a, b, M, N, K);
 
     float *A = nullptr;
     float *B = nullptr;
@@ -129,19 +128,24 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMalloc((void **)&B, b_n * sizeof(float)));
     CUDA_CHECK(cudaMalloc((void **)&C, c_n * sizeof(float)));
 
-    CUDA_CHECK(cudaMemset(C, 0, c_n * sizeof(float)));
-
     dim3 block(TILE, TILE);
     dim3 grid((K + block.x - 1) / block.x, (M + block.y - 1) / block.y);
 
     CUDA_CHECK(cudaMemcpy(A, a, a_n * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(B, b, b_n * sizeof(float), cudaMemcpyHostToDevice));
-    // matmul<<<grid, block>>>(A, B, C, M, N, K);
+
+    // Naive kernel produces the reference output.
+    matmul<<<grid, block>>>(A, B, C, M, N, K);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(ref, C, c_n * sizeof(float), cudaMemcpyDeviceToHost));
+
+    // Tiled kernel under test.
     matmul_shared_block<<<grid, block>>>(A, B, C, M, N, K);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy(c, C, c_n * sizeof(float), cudaMemcpyDeviceToHost));
-    int rc = host_gemm(a, b, got, c, M, N, K);
+    int rc = host_compare(ref, c, M, K);
 
     const int iters = 10;
     float ms = test_time_matmul(matmul, A, B, C, M, N, K, iters);
@@ -153,7 +157,7 @@ int main(int argc, char **argv) {
     delete[] a;
     delete[] b;
     delete[] c;
-    delete[] got;
+    delete[] ref;
     CUDA_CHECK(cudaFree(A));
     CUDA_CHECK(cudaFree(B));
     CUDA_CHECK(cudaFree(C));
@@ -189,36 +193,26 @@ float test_time_matmul(matmul_kernel kernel, float *A, float *B, float *C, int m
     return ms / iters;
 }
 
-int host_gemm(float *a, float *b, float *got, const float *c, int m, int n, int k) {
-    if (c == nullptr) {
-        for (int i = 0; i < m; ++i) {
-            for (int t = 0; t < n; ++t) {
-                a[(size_t)i * n + t] = (float)((i + t) % 13);
-            }
-        }
+void host_fill(float *a, float *b, int m, int n, int k) {
+    for (int i = 0; i < m; ++i) {
         for (int t = 0; t < n; ++t) {
-            for (int j = 0; j < k; ++j) {
-                b[(size_t)t * k + j] = (float)((t + 2 * j) % 7);
-            }
+            a[(size_t)i * n + t] = (float)((i + t) % 13);
         }
-        for (int i = 0; i < m; ++i) {
-            for (int j = 0; j < k; ++j) {
-                float sum = 0.f;
-                for (int t = 0; t < n; ++t) {
-                    sum += a[(size_t)i * n + t] * b[(size_t)t * k + j];
-                }
-                got[(size_t)i * k + j] = sum;
-            }
-        }
-        return 0;
     }
+    for (int t = 0; t < n; ++t) {
+        for (int j = 0; j < k; ++j) {
+            b[(size_t)t * k + j] = (float)((t + 2 * j) % 7);
+        }
+    }
+}
 
+int host_compare(const float *ref, const float *got, int m, int k) {
     const size_t count = (size_t)m * k;
     for (size_t idx = 0; idx < count; ++idx) {
-        if (c[idx] != got[idx]) {
+        if (got[idx] != ref[idx]) {
             int i = (int)(idx / k);
             int j = (int)(idx % k);
-            printf("Error at (%d, %d): %g != %g\n", i, j, c[idx], got[idx]);
+            printf("Error at (%d, %d): %g != %g\n", i, j, got[idx], ref[idx]);
             return 1;
         }
     }
