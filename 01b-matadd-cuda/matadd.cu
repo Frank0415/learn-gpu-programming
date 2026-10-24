@@ -31,7 +31,7 @@ __global__ void matadd_vec_float4(float *a, float *b, float *out, int n) {
         reinterpret_cast<float4 *>(out)[pos] =
             make_float4(x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w);
     } else {
-        for (int i = base; i < n; ++i) // 尾部 ≤3 个，标量补齐
+        for (int i = base; i < n; ++i) // tail: at most 3 leftover elements
             out[i] = a[i] + b[i];
     }
 }
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMalloc((void **)&D, bytes));
     dim3 grid_vec((total + (BlockSize * 4) - 1) / (BlockSize * 4));
 
-    // 16B 对齐契约：cudaMalloc 基址必然满足，但不满足时回退标量路径
+    // 16B alignment contract: cudaMalloc guarantees it; fall back to scalar if unmet
     bool aligned = reinterpret_cast<uintptr_t>(A) % alignof(float4) == 0 &&
                    reinterpret_cast<uintptr_t>(B) % alignof(float4) == 0 &&
                    reinterpret_cast<uintptr_t>(D) % alignof(float4) == 0;
