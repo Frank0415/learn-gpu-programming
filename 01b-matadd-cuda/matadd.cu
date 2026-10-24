@@ -64,12 +64,52 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy(c, C, bytes, cudaMemcpyDeviceToHost));
 
-    int rc = host_check(a, b, c, M, N);
+    int rc = host_check(a, b, c, 1, total);
 
     float *d = (float *)host_alloc(bytes);
     float *D = nullptr;
     CUDA_CHECK(cudaMalloc((void **)&D, bytes));
     dim3 grid_vec((total + (BlockSize * 4) - 1) / (BlockSize * 4));
+
+    // 16B 对齐契约：cudaMalloc 基址必然满足，但不满足时回退标量路径
+    bool aligned = reinterpret_cast<uintptr_t>(A) % alignof(float4) == 0 &&
+                   reinterpret_cast<uintptr_t>(B) % alignof(float4) == 0 &&
+                   reinterpret_cast<uintptr_t>(D) % alignof(float4) == 0;
+    if (aligned) {
+        matadd_vec_float4<<<grid_vec, BlockSize>>>(A, B, D, total);
+    } else {
+        matadd<<<grid, BlockSize>>>(A, B, D, total);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(d, D, bytes, cudaMemcpyDeviceToHost));
+    rc |= host_check(a, b, d, 1, total);
+
+    const int reps = 50;
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+    auto time_kernel = [&](add_kernel k, dim3 g) {
+        for (int r = 0; r < 5; ++r)
+            k<<<g, BlockSize>>>(A, B, D, total);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaEventRecord(start));
+        for (int r = 0; r < reps; ++r)
+            k<<<g, BlockSize>>>(A, B, D, total);
+        CUDA_CHECK(cudaEventRecord(stop));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        float ms = 0;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+        return ms / reps;
+    };
+    float ms_scalar = time_kernel(matadd, grid);
+    float ms_vec = time_kernel(matadd_vec_float4, grid_vec);
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+
+    double gb = 3.0 * total * sizeof(float);
+    printf("matadd:            %.4f ms  (%.1f GB/s)\n", ms_scalar, gb / (ms_scalar * 1e6));
+    printf("matadd_vec_float4: %.4f ms  (%.1f GB/s)\n", ms_vec, gb / (ms_vec * 1e6));
 
     free(a);
     free(b);
@@ -78,6 +118,7 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaFree(A));
     CUDA_CHECK(cudaFree(B));
     CUDA_CHECK(cudaFree(C));
+    CUDA_CHECK(cudaFree(D));
 
     return rc;
 }
