@@ -7,7 +7,7 @@
 #include <__clang_cuda_runtime_wrapper.h>
 #endif
 
-constexpr int LIMIT = 4096 * 4096;
+constexpr int LIMIT = 1024 * 1024;
 
 constexpr int M = 16384;
 constexpr int N = 16384;
@@ -34,14 +34,19 @@ __global__ void matadd(float *a, float *b, float *out, int n) {
 __global__ void matadd_vec_float4(float *a, float *b, float *out, int n) {
     int pos = blockDim.x * blockIdx.x + threadIdx.x;
     int base = pos * 4;
-    if (base + 3 < n) {
-        float4 x = reinterpret_cast<const float4 *>(a)[pos];
-        float4 y = reinterpret_cast<const float4 *>(b)[pos];
-        reinterpret_cast<float4 *>(out)[pos] =
-            make_float4(x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w);
-    } else {
-        for (int i = base; i < n; ++i) // tail: at most 3 leftover elements
-            out[i] = a[i] + b[i];
+    int stride = blockDim.x * gridDim.x * 4;
+    for (int i = base; i < n; i += stride) {
+        if (i < n - 3) { // can be applied to float4
+            // DO NOT use a[i], as i is multiplied by 4.
+            float4 x = *reinterpret_cast<const float4 *>(a + i);
+            float4 y = *reinterpret_cast<const float4 *>(b + i);
+            *reinterpret_cast<float4 *>(out + i) =
+                make_float4(x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w);
+        } else {
+            for (int j = i; j < n; j++) {
+                out[j] = a[j] + b[j];
+            }
+        }
     }
 }
 
@@ -70,10 +75,13 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMalloc((void **)&d_bad, sizeof(int)));
 
     dim3 grid((total + BlockSize - 1) / BlockSize);
-    dim3 grid_vec((total + (BlockSize * 4) - 1) / (BlockSize * 4));
-
+    dim3 grid_vec;
+    if (total > LIMIT) {
+        grid_vec = dim3(LIMIT / (BlockSize * 4));
+    } else {
+        grid_vec = dim3((total + (BlockSize * 4) - 1) / (BlockSize * 4));
+    }
     init<<<grid, BlockSize>>>(A, B, total);
-
     matadd<<<grid, BlockSize>>>(A, B, C, total); // reference implementation
 
     bool aligned = reinterpret_cast<uintptr_t>(A) % alignof(float4) == 0 &&
@@ -85,7 +93,6 @@ int main(int argc, char **argv) {
         matadd<<<grid, BlockSize>>>(A, B, D, total);
     }
     CUDA_CHECK(cudaGetLastError());
-
     CUDA_CHECK(cudaMemset(d_bad, 0, sizeof(int)));
     compare<<<grid, BlockSize>>>(C, D, total, d_bad);
     int bad = 0;
