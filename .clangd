@@ -1,0 +1,16 @@
+# Applies to all .cu/.cuh in this repo. --cuda-host-only keeps a single
+# compile job (device+host split crashes clangd with
+# "expected exactly one compiler job") and fixes .cuh which clang's
+# driver doesn't recognize at all.
+If:
+  PathMatch: .*\.(cu|cuh)
+CompileFlags:
+  Compiler: /usr/bin/g++-15
+  Add:
+    - -xcuda
+    - -std=c++17
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_120
+    - --cuda-host-only
+    - --gcc-install-dir=/usr/lib/gcc/x86_64-redhat-linux/15
+    - -Wno-unknown-cuda-version
