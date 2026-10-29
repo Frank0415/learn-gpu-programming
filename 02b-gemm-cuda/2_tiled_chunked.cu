@@ -4,53 +4,61 @@ constexpr int M = 4096;
 constexpr int N = 4096;
 constexpr int K = 4096;
 
-constexpr int SIZE = 8;
-
-constexpr int THREADSIZE = 4;
+constexpr int BLOCK = 8;
+constexpr int MICROTILE = 4;
+constexpr int BLOCK_TILE = BLOCK * MICROTILE;
+constexpr int CHUNK = BLOCK;
 
 __host__ __device__ int posToIdx(int x, int y, int dim_x, int dim_y) { return y * dim_x + x; }
 
-// Every time collab to take a chunk of SIZE * SIZE,
-// and total of SIZE * N from Matrix a and N * SIZE from Matrix b,
-// and split in N's direction
-
 __global__ void matmul(float *a, float *b, float *c) {
-    int idY = blockIdx.y * blockDim.y + threadIdx.y;
-    int idX = blockIdx.x * blockDim.x + threadIdx.x;
+    int row0 = blockIdx.y * BLOCK_TILE + threadIdx.y * MICROTILE;
+    int col0 = blockIdx.x * BLOCK_TILE + threadIdx.x * MICROTILE;
 
-    constexpr int stride = SIZE * THREADSIZE;
+    int chunks = (N + CHUNK - 1) / CHUNK;
 
-    int iters = (N + stride - 1) / stride;
+    __shared__ float tileA[BLOCK_TILE * CHUNK];
+    __shared__ float tileB[CHUNK * BLOCK_TILE];
 
-    __shared__ float tileA[SIZE * SIZE];
-    __shared__ float tileB[SIZE * SIZE];
+    float acc[MICROTILE][MICROTILE] = {};
 
-    int num_x = K;
-    int num_y = M;
-    int idA, idB;
-    int idC = posToIdx(idX, idY, num_x, num_y);
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
 
-    int idShared = posToIdx(threadIdx.x, threadIdx.y, SIZE, SIZE);
-    float inc = 0;
-
-    for (int j = 0; j < iters; j++) {
-        idA = posToIdx(threadIdx.x + j * SIZE, idY, N, M);
-        idB = posToIdx(idX, j * SIZE + threadIdx.y, K, N);
-        tileA[idShared] = a[idA];
-        tileB[idShared] = b[idB];
+    for (int chunk = 0; chunk < chunks; chunk++) {
+        for (int elem = tid; elem < BLOCK_TILE * CHUNK; elem += BLOCK * BLOCK) {
+            int tile_row = elem / CHUNK, tile_col = elem % CHUNK;
+            int global_row = blockIdx.y * BLOCK_TILE + tile_row;
+            int global_col = chunk * CHUNK + tile_col;
+            tileA[elem] = (global_row < M && global_col < N) ? a[posToIdx(global_col, global_row, N, M)] : 0.0f;
+        }
+        for (int elem = tid; elem < CHUNK * BLOCK_TILE; elem += BLOCK * BLOCK) {
+            int tile_row = elem / BLOCK_TILE, tile_col = elem % BLOCK_TILE;
+            int global_row = chunk * CHUNK + tile_row;
+            int global_col = blockIdx.x * BLOCK_TILE + tile_col;
+            tileB[elem] = (global_row < N && global_col < K) ? b[posToIdx(global_col, global_row, K, N)] : 0.0f;
+        }
         __syncthreads();
-        for (int i = 0; i < SIZE; i++) {
-            float ax = tileA[threadIdx.y * blockDim.x + i];
-            float bx = tileB[i * blockDim.y + threadIdx.x];
-
-            inc += ax * bx;
+#pragma unroll
+        for (int kk = 0; kk < CHUNK; kk++) {
+            float fragA[MICROTILE], fragB[MICROTILE];
+#pragma unroll
+            for (int i = 0; i < MICROTILE; i++)
+                fragA[i] = tileA[posToIdx(kk, threadIdx.y * MICROTILE + i, CHUNK, BLOCK_TILE)];
+#pragma unroll
+            for (int j = 0; j < MICROTILE; j++)
+                fragB[j] = tileB[posToIdx(threadIdx.x * MICROTILE + j, kk, BLOCK_TILE, CHUNK)];
+#pragma unroll
+            for (int i = 0; i < MICROTILE; i++)
+#pragma unroll
+                for (int j = 0; j < MICROTILE; j++)
+                    acc[i][j] += fragA[i] * fragB[j];
         }
         __syncthreads();
     }
-    if (idX >= K || idY >= M) {
-        return;
-    }
-    c[idC] = inc;
+    for (int i = 0; i < MICROTILE; i++)
+        for (int j = 0; j < MICROTILE; j++)
+            if (row0 + i < M && col0 + j < K)
+                c[posToIdx(col0 + j, row0 + i, K, M)] = acc[i][j];
 }
 
 int main() {
@@ -76,8 +84,8 @@ int main() {
     cudaMemcpy(a, a_host, a_size, cudaMemcpyHostToDevice);
     cudaMemcpy(b, b_host, b_size, cudaMemcpyHostToDevice);
 
-    dim3 grid((K + SIZE - 1) / SIZE, (M + SIZE - 1) / SIZE); // x->col(K), y->row(M)
-    dim3 block(SIZE, SIZE);
+    dim3 grid((K + BLOCK_TILE - 1) / BLOCK_TILE, (M + BLOCK_TILE - 1) / BLOCK_TILE);
+    dim3 block(BLOCK, BLOCK);
 
     cudaStream_t stream;
     cudaStreamCreate(&stream);
